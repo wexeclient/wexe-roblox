@@ -1,32 +1,46 @@
---[[
-    wexe - Purple Themed ESP Script
-    Offset tabanlı ESP, mor menü, Drawing API kullanır.
-    Executor: Synapse X, Krnl, Fluxus vb. (Drawing desteklemeli)
-]]
+-- // wexe ESP - Purple Theme | Offset Based | Drawing API
+-- // Direkt GitHub'a yapıştır, çalıştır.
 
--- Servisler
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
--- Drawing kütüphanesini al (bazı executorlarda getrenv().Drawing)
+-- // ===== GELİŞMİŞ DRAWING ALGILAMA =====
 local Drawing = nil
-pcall(function()
-    Drawing = getrenv().Drawing
-end)
-if not Drawing then
+
+if type(Drawing) == "table" then
+    -- zaten globalde var
+else
     pcall(function()
-        Drawing = Drawing or require(game:GetService("ReplicatedStorage"):FindFirstChild("Drawing"))
+        if getrenv then
+            Drawing = getrenv().Drawing
+        end
     end)
 end
-if not Drawing then
-    warn("Drawing kütüphanesi bulunamadı! ESP çalışmayacak.")
-    return
+
+if not Drawing and syn and syn.protect then
+    pcall(function()
+        Drawing = syn.protect(function() return getrenv().Drawing end)()
+    end)
 end
 
--- ESP AYARLARI
+if not Drawing then
+    pcall(function()
+        local ds = game:GetService("ReplicatedStorage"):FindFirstChild("Drawing")
+        if ds then
+            Drawing = require(ds)
+        end
+    end)
+end
+
+if not Drawing then
+    warn("wexe ESP: Drawing kütüphanesi bulunamadı!")
+    return
+end
+-- // ===== DRAWING HAZIR =====
+
 local Settings = {
     ESP_Enabled = true,
     Boxes = true,
@@ -37,10 +51,8 @@ local Settings = {
     HeadDot = true,
 }
 
--- Her oyuncu için canlı çizim objelerini tutan tablo
 local PlayerDrawings = {}
 
--- Yardımcı: bir oyuncunun tüm çizimlerini temizle
 local function ClearPlayerDrawings(player)
     if PlayerDrawings[player] then
         for _, drawing in pairs(PlayerDrawings[player]) do
@@ -50,14 +62,12 @@ local function ClearPlayerDrawings(player)
     end
 end
 
--- Tüm çizimleri temizle
 local function ClearAllDrawings()
     for player, _ in pairs(PlayerDrawings) do
         ClearPlayerDrawings(player)
     end
 end
 
--- Çizim güncelleme / oluşturma fonksiyonu
 local function UpdateESP()
     if not Settings.ESP_Enabled then
         ClearAllDrawings()
@@ -71,14 +81,12 @@ local function UpdateESP()
         end
     end
 
-    -- Var olmayan oyuncuları temizle
     for player, _ in pairs(PlayerDrawings) do
         if not currentPlayers[player] then
             ClearPlayerDrawings(player)
         end
     end
 
-    -- Her oyuncu için çiz
     for player, _ in pairs(currentPlayers) do
         local character = player.Character
         if character and character:FindFirstChild("HumanoidRootPart") and character:FindFirstChild("Humanoid") then
@@ -86,7 +94,6 @@ local function UpdateESP()
             local humanoid = character.Humanoid
             local head = character:FindFirstChild("Head")
 
-            -- Ekran pozisyonlarını hesapla (offset mantığı)
             local rootScreen, rootVisible = Camera:WorldToViewportPoint(rootPart.Position)
             local headScreen, headVisible
             if head then
@@ -96,7 +103,6 @@ local function UpdateESP()
             end
             local footScreen = Camera:WorldToViewportPoint(rootPart.Position - Vector3.new(0, 3, 0))
 
-            -- Görünürlük kontrolü
             local onScreen = rootVisible and headVisible and rootScreen.Z > 0 and headScreen.Z > 0
 
             if not onScreen then
@@ -104,20 +110,17 @@ local function UpdateESP()
                 continue
             end
 
-            -- Kutu boyutlandırma (mesafeye göre offset)
             local distance = (Camera.CFrame.Position - rootPart.Position).Magnitude
             local boxHeight = math.abs(headScreen.Y - footScreen.Y)
-            local boxWidth = boxHeight * 0.5  -- genişlik / yükseklik oranı
+            local boxWidth = boxHeight * 0.5
             local boxX = rootScreen.X - boxWidth / 2
             local boxY = headScreen.Y
 
-            -- Eğer bu oyuncu için çizim yoksa oluştur
             if not PlayerDrawings[player] then
                 PlayerDrawings[player] = {}
             end
             local drawings = PlayerDrawings[player]
 
-            -- Yardımcı: bir çizim objesini güncelle veya oluştur
             local function UpdateOrCreateDrawing(name, drawingType, properties)
                 if not drawings[name] then
                     drawings[name] = Drawing.new(drawingType)
@@ -129,7 +132,6 @@ local function UpdateESP()
                 return d
             end
 
-            -- KUTU (Box)
             if Settings.Boxes then
                 UpdateOrCreateDrawing("Box", "Square", {
                     Visible = true,
@@ -144,7 +146,6 @@ local function UpdateESP()
                 if drawings["Box"] then drawings["Box"].Visible = false end
             end
 
-            -- İZ ÇİZGİSİ (Tracer)
             if Settings.Tracers then
                 local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
                 UpdateOrCreateDrawing("Tracer", "Line", {
@@ -159,7 +160,6 @@ local function UpdateESP()
                 if drawings["Tracer"] then drawings["Tracer"].Visible = false end
             end
 
-            -- İSİM (Name)
             if Settings.Names then
                 UpdateOrCreateDrawing("Name", "Text", {
                     Visible = true,
@@ -175,7 +175,6 @@ local function UpdateESP()
                 if drawings["Name"] then drawings["Name"].Visible = false end
             end
 
-            -- MESAFE (Distance)
             if Settings.Distance then
                 local distanceText = string.format("%.0f m", distance)
                 UpdateOrCreateDrawing("Distance", "Text", {
@@ -192,14 +191,12 @@ local function UpdateESP()
                 if drawings["Distance"] then drawings["Distance"].Visible = false end
             end
 
-            -- CAN BARI (Health Bar)
             if Settings.HealthBar then
                 local health = humanoid.Health / humanoid.MaxHealth
                 local barWidth = 2
                 local barHeight = boxHeight
                 local barX = boxX - barWidth - 2
                 local barY = boxY
-                -- Arkaplan
                 UpdateOrCreateDrawing("HealthBG", "Square", {
                     Visible = true,
                     Position = Vector2.new(barX, barY),
@@ -208,8 +205,7 @@ local function UpdateESP()
                     Filled = true,
                     Transparency = 1
                 })
-                -- Dolu kısım
-                local healthColor = Color3.fromRGB(255 - (health * 255), health * 255, 0) -- kırmızıdan yeşile
+                local healthColor = Color3.fromRGB(255 - (health * 255), health * 255, 0)
                 UpdateOrCreateDrawing("HealthFill", "Square", {
                     Visible = true,
                     Position = Vector2.new(barX, barY + (1 - health) * barHeight),
@@ -223,7 +219,6 @@ local function UpdateESP()
                 if drawings["HealthFill"] then drawings["HealthFill"].Visible = false end
             end
 
-            -- KAFA NOKTASI (Head Dot)
             if Settings.HeadDot then
                 UpdateOrCreateDrawing("HeadDot", "Circle", {
                     Visible = true,
@@ -243,29 +238,26 @@ local function UpdateESP()
     end
 end
 
--- ========== MENÜ (wexe) ==========
+-- // MENÜ KURULUMU
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "wexeGUI"
-ScreenGui.Parent = game:GetService("CoreGui") -- veya LocalPlayer:WaitForChild("PlayerGui")
+ScreenGui.Parent = game:GetService("CoreGui")
 ScreenGui.ResetOnSpawn = false
 
--- Ana çerçeve
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "Main"
 MainFrame.Size = UDim2.new(0, 230, 0, 300)
 MainFrame.Position = UDim2.new(0.5, -115, 0.5, -150)
-MainFrame.BackgroundColor3 = Color3.fromRGB(80, 0, 130) -- mor
+MainFrame.BackgroundColor3 = Color3.fromRGB(80, 0, 130)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Draggable = true
 MainFrame.Parent = ScreenGui
 
--- Yuvarlak köşe
 local UICorner = Instance.new("UICorner")
 UICorner.CornerRadius = UDim.new(0, 8)
 UICorner.Parent = MainFrame
 
--- Başlık çubuğu
 local TitleBar = Instance.new("Frame")
 TitleBar.Name = "TitleBar"
 TitleBar.Size = UDim2.new(1, 0, 0, 40)
@@ -306,7 +298,6 @@ local CloseCorner = Instance.new("UICorner")
 CloseCorner.CornerRadius = UDim.new(0, 6)
 CloseCorner.Parent = CloseButton
 
--- İçerik alanı (toggle listesi)
 local ContentFrame = Instance.new("ScrollingFrame")
 ContentFrame.Size = UDim2.new(1, -10, 1, -50)
 ContentFrame.Position = UDim2.new(0, 5, 0, 45)
@@ -321,7 +312,6 @@ UIListLayout.Padding = UDim.new(0, 5)
 UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
 UIListLayout.Parent = ContentFrame
 
--- Toggle oluşturma fonksiyonu
 local function CreateToggle(name, default, callback)
     local ToggleFrame = Instance.new("Frame")
     ToggleFrame.Name = name
@@ -382,7 +372,6 @@ local function CreateToggle(name, default, callback)
     }
 end
 
--- Toggle'ları oluştur
 CreateToggle("ESP Acik", Settings.ESP_Enabled, function(val)
     Settings.ESP_Enabled = val
     if not val then ClearAllDrawings() end
@@ -394,7 +383,6 @@ CreateToggle("Mesafe (Distance)", Settings.Distance, function(val) Settings.Dist
 CreateToggle("Can Bari (Health)", Settings.HealthBar, function(val) Settings.HealthBar = val end)
 CreateToggle("Kafa Noktasi", Settings.HeadDot, function(val) Settings.HeadDot = val end)
 
--- ALT BİLGİ
 local Footer = Instance.new("TextLabel")
 Footer.Text = "wexe | offset ESP"
 Footer.Size = UDim2.new(1, 0, 0, 20)
@@ -405,12 +393,10 @@ Footer.Font = Enum.Font.GothamMedium
 Footer.TextSize = 11
 Footer.Parent = MainFrame
 
--- ========== ANA DÖNGÜ ==========
 RunService.RenderStepped:Connect(function()
     UpdateESP()
 end)
 
--- Oyuncu ayrılınca çizimleri temizle
 Players.PlayerRemoving:Connect(function(player)
     ClearPlayerDrawings(player)
 end)
