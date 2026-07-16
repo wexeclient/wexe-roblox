@@ -1,402 +1,652 @@
--- // wexe ESP - Purple Theme | Offset Based | Drawing API
--- // Direkt GitHub'a yapıştır, çalıştır.
+-- 100% DIRECT FOCUS AIMBOT, PREMIUM SKELETON (WITH JOINTS) & VISUAL HP BAR ESP
+
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
 
 local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local Camera = workspace.CurrentCamera
-local LocalPlayer = Players.LocalPlayer
 
--- // ===== GELİŞMİŞ DRAWING ALGILAMA =====
-local Drawing = nil
-
-if type(Drawing) == "table" then
-    -- zaten globalde var
-else
-    pcall(function()
-        if getrenv then
-            Drawing = getrenv().Drawing
-        end
-    end)
+-- Player Check
+if not LocalPlayer then
+    LocalPlayer = Players.PlayerAdded:Wait()
 end
 
-if not Drawing and syn and syn.protect then
-    pcall(function()
-        Drawing = syn.protect(function() return getrenv().Drawing end)()
-    end)
-end
-
-if not Drawing then
-    pcall(function()
-        local ds = game:GetService("ReplicatedStorage"):FindFirstChild("Drawing")
-        if ds then
-            Drawing = require(ds)
-        end
-    end)
-end
-
-if not Drawing then
-    warn("wexe ESP: Drawing kütüphanesi bulunamadı!")
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui", 15)
+if not PlayerGui then
+    warn("[ERROR] PlayerGui not found!")
     return
 end
--- // ===== DRAWING HAZIR =====
 
-local Settings = {
-    ESP_Enabled = true,
-    Boxes = true,
-    Tracers = true,
-    Names = true,
-    Distance = true,
-    HealthBar = true,
-    HeadDot = true,
+-- Clear old menu
+if PlayerGui:FindFirstChild("TestMenu_TR") then
+    PlayerGui:FindFirstChild("TestMenu_TR"):Destroy()
+end
+
+-- ==========================================
+-- 1. SETTINGS, COLORS & FOV (DRAWING API)
+-- ==========================================
+
+local Ayarlar = {
+    AimAktif = false,
+    HedefKilidi = false,
+    AimBolgesi = "Head",
+    FOV = 120,
+    Yumusaklik = 4,
+    SkeletonEspAktif = false,
+    BoxEspAktif = false,
+    SeciliRenkIndex = 1
 }
 
-local PlayerDrawings = {}
+local RenkPaleti = {
+    {Isim = "KIRMIZI", Renk = Color3.fromRGB(255, 40, 40)},
+    {Isim = "YESIL", Renk = Color3.fromRGB(40, 255, 40)},
+    {Isim = "MAVI", Renk = Color3.fromRGB(40, 140, 255)},
+    {Isim = "MOR", Renk = Color3.fromRGB(180, 40, 255)},
+    {Isim = "TURUNCU", Renk = Color3.fromRGB(255, 140, 40)},
+    {Isim = "CYAN", Renk = Color3.fromRGB(0, 255, 255)}
+}
 
-local function ClearPlayerDrawings(player)
-    if PlayerDrawings[player] then
-        for _, drawing in pairs(PlayerDrawings[player]) do
-            pcall(function() drawing:Remove() end)
-        end
-        PlayerDrawings[player] = nil
+local function getAktifRenk()
+    return RenkPaleti[Ayarlar.SeciliRenkIndex].Renk
+end
+
+-- Dynamic Health Color Lerp (Green -> Orange -> Red)
+local function getHealthColor(percent)
+    if percent > 0.5 then
+        return Color3.fromRGB(255, 140, 0):Lerp(Color3.fromRGB(0, 255, 40), (percent - 0.5) * 2)
+    else
+        return Color3.fromRGB(255, 40, 40):Lerp(Color3.fromRGB(255, 140, 0), percent * 2)
     end
 end
 
-local function ClearAllDrawings()
-    for player, _ in pairs(PlayerDrawings) do
-        ClearPlayerDrawings(player)
-    end
-end
+-- FOV Circle
+local FovCircle = Drawing.new("Circle")
+FovCircle.Color = Color3.fromRGB(0, 255, 255)
+FovCircle.Thickness = 1.5
+FovCircle.NumSides = 64
+FovCircle.Filled = false
+FovCircle.Transparency = 1
+FovCircle.Visible = false
 
-local function UpdateESP()
-    if not Settings.ESP_Enabled then
-        ClearAllDrawings()
-        return
-    end
+-- ==========================================
+-- 2. GUI MENU (OVERLAY & LAYER FIX)
+-- ==========================================
 
-    local currentPlayers = {}
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            currentPlayers[player] = true
-        end
-    end
-
-    for player, _ in pairs(PlayerDrawings) do
-        if not currentPlayers[player] then
-            ClearPlayerDrawings(player)
-        end
-    end
-
-    for player, _ in pairs(currentPlayers) do
-        local character = player.Character
-        if character and character:FindFirstChild("HumanoidRootPart") and character:FindFirstChild("Humanoid") then
-            local rootPart = character.HumanoidRootPart
-            local humanoid = character.Humanoid
-            local head = character:FindFirstChild("Head")
-
-            local rootScreen, rootVisible = Camera:WorldToViewportPoint(rootPart.Position)
-            local headScreen, headVisible
-            if head then
-                headScreen, headVisible = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
-            else
-                headScreen, headVisible = Camera:WorldToViewportPoint(rootPart.Position + Vector3.new(0, 2, 0))
-            end
-            local footScreen = Camera:WorldToViewportPoint(rootPart.Position - Vector3.new(0, 3, 0))
-
-            local onScreen = rootVisible and headVisible and rootScreen.Z > 0 and headScreen.Z > 0
-
-            if not onScreen then
-                ClearPlayerDrawings(player)
-                continue
-            end
-
-            local distance = (Camera.CFrame.Position - rootPart.Position).Magnitude
-            local boxHeight = math.abs(headScreen.Y - footScreen.Y)
-            local boxWidth = boxHeight * 0.5
-            local boxX = rootScreen.X - boxWidth / 2
-            local boxY = headScreen.Y
-
-            if not PlayerDrawings[player] then
-                PlayerDrawings[player] = {}
-            end
-            local drawings = PlayerDrawings[player]
-
-            local function UpdateOrCreateDrawing(name, drawingType, properties)
-                if not drawings[name] then
-                    drawings[name] = Drawing.new(drawingType)
-                end
-                local d = drawings[name]
-                for prop, value in pairs(properties) do
-                    pcall(function() d[prop] = value end)
-                end
-                return d
-            end
-
-            if Settings.Boxes then
-                UpdateOrCreateDrawing("Box", "Square", {
-                    Visible = true,
-                    Position = Vector2.new(boxX, boxY),
-                    Size = Vector2.new(boxWidth, boxHeight),
-                    Color = Color3.fromRGB(255, 255, 255),
-                    Thickness = 2,
-                    Filled = false,
-                    Transparency = 1
-                })
-            else
-                if drawings["Box"] then drawings["Box"].Visible = false end
-            end
-
-            if Settings.Tracers then
-                local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
-                UpdateOrCreateDrawing("Tracer", "Line", {
-                    Visible = true,
-                    From = rootScreen,
-                    To = screenCenter,
-                    Color = Color3.fromRGB(255, 255, 255),
-                    Thickness = 1,
-                    Transparency = 1
-                })
-            else
-                if drawings["Tracer"] then drawings["Tracer"].Visible = false end
-            end
-
-            if Settings.Names then
-                UpdateOrCreateDrawing("Name", "Text", {
-                    Visible = true,
-                    Text = player.Name,
-                    Position = Vector2.new(rootScreen.X, headScreen.Y - 20),
-                    Color = Color3.fromRGB(255, 255, 255),
-                    Size = 13,
-                    Center = true,
-                    Outline = true,
-                    Transparency = 1
-                })
-            else
-                if drawings["Name"] then drawings["Name"].Visible = false end
-            end
-
-            if Settings.Distance then
-                local distanceText = string.format("%.0f m", distance)
-                UpdateOrCreateDrawing("Distance", "Text", {
-                    Visible = true,
-                    Text = distanceText,
-                    Position = Vector2.new(rootScreen.X, headScreen.Y - 35),
-                    Color = Color3.fromRGB(255, 255, 255),
-                    Size = 12,
-                    Center = true,
-                    Outline = true,
-                    Transparency = 1
-                })
-            else
-                if drawings["Distance"] then drawings["Distance"].Visible = false end
-            end
-
-            if Settings.HealthBar then
-                local health = humanoid.Health / humanoid.MaxHealth
-                local barWidth = 2
-                local barHeight = boxHeight
-                local barX = boxX - barWidth - 2
-                local barY = boxY
-                UpdateOrCreateDrawing("HealthBG", "Square", {
-                    Visible = true,
-                    Position = Vector2.new(barX, barY),
-                    Size = Vector2.new(barWidth, barHeight),
-                    Color = Color3.fromRGB(50, 50, 50),
-                    Filled = true,
-                    Transparency = 1
-                })
-                local healthColor = Color3.fromRGB(255 - (health * 255), health * 255, 0)
-                UpdateOrCreateDrawing("HealthFill", "Square", {
-                    Visible = true,
-                    Position = Vector2.new(barX, barY + (1 - health) * barHeight),
-                    Size = Vector2.new(barWidth, health * barHeight),
-                    Color = healthColor,
-                    Filled = true,
-                    Transparency = 1
-                })
-            else
-                if drawings["HealthBG"] then drawings["HealthBG"].Visible = false end
-                if drawings["HealthFill"] then drawings["HealthFill"].Visible = false end
-            end
-
-            if Settings.HeadDot then
-                UpdateOrCreateDrawing("HeadDot", "Circle", {
-                    Visible = true,
-                    Position = Vector2.new(headScreen.X, headScreen.Y),
-                    Radius = 4,
-                    Color = Color3.fromRGB(255, 100, 100),
-                    Filled = true,
-                    Transparency = 1
-                })
-            else
-                if drawings["HeadDot"] then drawings["HeadDot"].Visible = false end
-            end
-
-        else
-            ClearPlayerDrawings(player)
-        end
-    end
-end
-
--- // MENÜ KURULUMU
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "wexeGUI"
-ScreenGui.Parent = game:GetService("CoreGui")
+ScreenGui.Name = "TestMenu_TR"
 ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.DisplayOrder = 999999
+ScreenGui.Parent = PlayerGui
 
+local menuAcik = true
+
+-- Main Frame
 local MainFrame = Instance.new("Frame")
-MainFrame.Name = "Main"
-MainFrame.Size = UDim2.new(0, 230, 0, 300)
-MainFrame.Position = UDim2.new(0.5, -115, 0.5, -150)
-MainFrame.BackgroundColor3 = Color3.fromRGB(80, 0, 130)
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 310, 0, 515)
+MainFrame.Position = UDim2.new(0.5, -155, 0.5, -257)
+MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
-MainFrame.Draggable = true
 MainFrame.Parent = ScreenGui
 
-local UICorner = Instance.new("UICorner")
-UICorner.CornerRadius = UDim.new(0, 8)
-UICorner.Parent = MainFrame
+local Corner = Instance.new("UICorner")
+Corner.CornerRadius = UDim.new(0, 10)
+Corner.Parent = MainFrame
 
-local TitleBar = Instance.new("Frame")
-TitleBar.Name = "TitleBar"
-TitleBar.Size = UDim2.new(1, 0, 0, 40)
-TitleBar.BackgroundColor3 = Color3.fromRGB(120, 0, 190)
-TitleBar.BorderSizePixel = 0
-TitleBar.Parent = MainFrame
+-- Invisible Modal Button (Allows walking while UI is active)
+local ModalButton = Instance.new("TextButton")
+ModalButton.Name = "ModalButton"
+ModalButton.Size = UDim2.new(0, 0, 0, 0)
+ModalButton.BackgroundTransparency = 1
+ModalButton.Text = ""
+ModalButton.Modal = true
+ModalButton.Parent = MainFrame
 
-local TitleCorner = Instance.new("UICorner")
-TitleCorner.CornerRadius = UDim.new(0, 8)
-TitleCorner.Parent = TitleBar
-
-local TitleLabel = Instance.new("TextLabel")
-TitleLabel.Text = "wexe"
-TitleLabel.Size = UDim2.new(1, -40, 1, 0)
-TitleLabel.Position = UDim2.new(0, 10, 0, 0)
-TitleLabel.BackgroundTransparency = 1
-TitleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-TitleLabel.Font = Enum.Font.GothamBold
-TitleLabel.TextSize = 20
-TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
-TitleLabel.Parent = TitleBar
-
-local CloseButton = Instance.new("TextButton")
-CloseButton.Text = "X"
-CloseButton.Size = UDim2.new(0, 30, 0, 30)
-CloseButton.Position = UDim2.new(1, -35, 0, 5)
-CloseButton.BackgroundColor3 = Color3.fromRGB(180, 0, 50)
-CloseButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-CloseButton.Font = Enum.Font.GothamBold
-CloseButton.TextSize = 18
-CloseButton.Parent = TitleBar
-CloseButton.MouseButton1Click:Connect(function()
-    ScreenGui:Destroy()
-    ClearAllDrawings()
-end)
-
-local CloseCorner = Instance.new("UICorner")
-CloseCorner.CornerRadius = UDim.new(0, 6)
-CloseCorner.Parent = CloseButton
-
-local ContentFrame = Instance.new("ScrollingFrame")
-ContentFrame.Size = UDim2.new(1, -10, 1, -50)
-ContentFrame.Position = UDim2.new(0, 5, 0, 45)
-ContentFrame.BackgroundTransparency = 1
-ContentFrame.CanvasSize = UDim2.new(0, 0, 0, 250)
-ContentFrame.ScrollBarThickness = 4
-ContentFrame.ScrollBarImageColor3 = Color3.fromRGB(180, 100, 255)
-ContentFrame.Parent = MainFrame
+local Title = Instance.new("TextLabel")
+Title.Name = "Title"
+Title.Size = UDim2.new(1, 0, 0, 40)
+Title.BackgroundTransparency = 1
+Title.Text = "TEST PANELI - Gelişmiş V9"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextSize = 15
+Title.Font = Enum.Font.SourceSansBold
+Title.Parent = MainFrame
 
 local UIListLayout = Instance.new("UIListLayout")
-UIListLayout.Padding = UDim.new(0, 5)
+UIListLayout.Parent = MainFrame
 UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
-UIListLayout.Parent = ContentFrame
+UIListLayout.Padding = UDim.new(0, 8)
+UIListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 
-local function CreateToggle(name, default, callback)
-    local ToggleFrame = Instance.new("Frame")
-    ToggleFrame.Name = name
-    ToggleFrame.Size = UDim2.new(1, -10, 0, 35)
-    ToggleFrame.BackgroundColor3 = Color3.fromRGB(100, 0, 160)
-    ToggleFrame.BorderSizePixel = 0
-    ToggleFrame.Parent = ContentFrame
+local Spacer = Instance.new("Frame")
+Spacer.Size = UDim2.new(1, 0, 0, 30)
+Spacer.BackgroundTransparency = 1
+Spacer.LayoutOrder = 0
+Spacer.Parent = MainFrame
+Title.Parent = Spacer
 
-    local ToggleCorner = Instance.new("UICorner")
-    ToggleCorner.CornerRadius = UDim.new(0, 6)
-    ToggleCorner.Parent = ToggleFrame
+local function butonOlustur(name, text, layoutOrder)
+    local button = Instance.new("TextButton")
+    button.Name = name
+    button.Size = UDim2.new(0.9, 0, 0, 35)
+    button.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    button.TextColor3 = Color3.fromRGB(255, 255, 255)
+    button.Font = Enum.Font.SourceSansSemibold
+    button.TextSize = 13
+    button.Text = text
+    button.LayoutOrder = layoutOrder
+    button.Parent = MainFrame
+    
+    local btnCorner = Instance.new("UICorner")
+    btnCorner.CornerRadius = UDim.new(0, 6)
+    btnCorner.Parent = button
+    
+    return button
+end
 
-    local TextLabel = Instance.new("TextLabel")
-    TextLabel.Text = name
-    TextLabel.Size = UDim2.new(0, 120, 1, 0)
-    TextLabel.Position = UDim2.new(0, 8, 0, 0)
-    TextLabel.BackgroundTransparency = 1
-    TextLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    TextLabel.Font = Enum.Font.GothamMedium
-    TextLabel.TextSize = 14
-    TextLabel.TextXAlignment = Enum.TextXAlignment.Left
-    TextLabel.Parent = ToggleFrame
+local function inputOlustur(name, labelText, layoutOrder)
+    local frame = Instance.new("Frame")
+    frame.Name = name
+    frame.Size = UDim2.new(0.9, 0, 0, 45)
+    frame.BackgroundTransparency = 1
+    frame.LayoutOrder = layoutOrder
+    frame.Parent = MainFrame
+    
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 0, 15)
+    label.BackgroundTransparency = 1
+    label.Text = labelText
+    label.TextColor3 = Color3.fromRGB(200, 200, 200)
+    label.Font = Enum.Font.SourceSans
+    label.TextSize = 12
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = frame
+    
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(1, 0, 0, 25)
+    box.Position = UDim2.new(0, 0, 0, 18)
+    box.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    box.TextColor3 = Color3.fromRGB(255, 255, 255)
+    box.Font = Enum.Font.SourceSans
+    box.TextSize = 13
+    box.Parent = frame
+    
+    local boxCorner = Instance.new("UICorner")
+    boxCorner.CornerRadius = UDim.new(0, 4)
+    boxCorner.Parent = box
+    
+    return box
+end
 
-    local Button = Instance.new("TextButton")
-    Button.Text = ""
-    Button.Size = UDim2.new(0, 40, 0, 25)
-    Button.Position = UDim2.new(1, -50, 0.5, -12)
-    Button.BackgroundColor3 = default and Color3.fromRGB(150, 255, 100) or Color3.fromRGB(200, 50, 50)
-    Button.BorderSizePixel = 0
-    Button.TextColor3 = Color3.fromRGB(255, 255, 255)
-    Button.Font = Enum.Font.GothamBold
-    Button.TextSize = 14
-    Button.Parent = ToggleFrame
+-- UI Controls
+local ToggleAimBtn = butonOlustur("ToggleAim", "Aim Kilidi: KAPALI", 1)
+local TargetLockBtn = butonOlustur("TargetLock", "Hedef Sabitleme: KAPALI", 2)
+local AimPartBtn = butonOlustur("AimPart", "Aim Bolgesi: KAFA", 3)
+local ToggleSkeletonBtn = butonOlustur("ToggleSkeleton", "Skeleton ESP: KAPALI", 4)
+local ToggleBoxBtn = butonOlustur("ToggleBox", "Box ESP: KAPALI", 5)
+local ToggleColorBtn = butonOlustur("ToggleColor", "ESP Rengi: KIRMIZI", 6)
+local FovInput = inputOlustur("FovInput", "Aim FOV Cember Boyutu (Derece):", 7)
+local SmoothnessInput = inputOlustur("SmoothnessInput", "Aim Yumusakligi (1-10):", 8)
 
-    local ButtonCorner = Instance.new("UICorner")
-    ButtonCorner.CornerRadius = UDim.new(0, 6)
-    ButtonCorner.Parent = Button
+FovInput.Text = "120"
+SmoothnessInput.Text = "4"
 
-    local state = default
-    local function UpdateVisual()
-        Button.BackgroundColor3 = state and Color3.fromRGB(150, 255, 100) or Color3.fromRGB(200, 50, 50)
-        Button.Text = state and "ON" or "OFF"
+-- ==========================================
+-- 3. INTERACTIVE BUTTON FUNCTIONS
+-- ==========================================
+
+ToggleAimBtn.MouseButton1Click:Connect(function()
+    Ayarlar.AimAktif = not Ayarlar.AimAktif
+    ToggleAimBtn.Text = Ayarlar.AimAktif and "Aim Kilidi: ACIK" or "Aim Kilidi: KAPALI"
+    ToggleAimBtn.BackgroundColor3 = Ayarlar.AimAktif and Color3.fromRGB(46, 117, 89) or Color3.fromRGB(35, 35, 35)
+end)
+
+TargetLockBtn.MouseButton1Click:Connect(function()
+    Ayarlar.HedefKilidi = not Ayarlar.HedefKilidi
+    TargetLockBtn.Text = Ayarlar.HedefKilidi and "Hedef Sabitleme: ACIK" or "Hedef Sabitleme: KAPALI"
+    TargetLockBtn.BackgroundColor3 = Ayarlar.HedefKilidi and Color3.fromRGB(46, 117, 89) or Color3.fromRGB(35, 35, 35)
+end)
+
+AimPartBtn.MouseButton1Click:Connect(function()
+    if Ayarlar.AimBolgesi == "Head" then
+        Ayarlar.AimBolgesi = "HumanoidRootPart"
+        AimPartBtn.Text = "Aim Bolgesi: GOVDE"
+    else
+        Ayarlar.AimBolgesi = "Head"
+        AimPartBtn.Text = "Aim Bolgesi: KAFA"
     end
-    UpdateVisual()
+end)
 
-    Button.MouseButton1Click:Connect(function()
-        state = not state
-        UpdateVisual()
-        callback(state)
-    end)
+ToggleSkeletonBtn.MouseButton1Click:Connect(function()
+    Ayarlar.SkeletonEspAktif = not Ayarlar.SkeletonEspAktif
+    ToggleSkeletonBtn.Text = Ayarlar.SkeletonEspAktif and "Skeleton ESP: ACIK" or "Skeleton ESP: KAPALI"
+    ToggleSkeletonBtn.BackgroundColor3 = Ayarlar.SkeletonEspAktif and Color3.fromRGB(46, 117, 89) or Color3.fromRGB(35, 35, 35)
+end)
 
-    return {
-        SetState = function(newState)
-            state = newState
-            UpdateVisual()
-            callback(state)
+ToggleBoxBtn.MouseButton1Click:Connect(function()
+    Ayarlar.BoxEspAktif = not Ayarlar.BoxEspAktif
+    ToggleBoxBtn.Text = Ayarlar.BoxEspAktif and "Box ESP: ACIK" or "Box ESP: KAPALI"
+    ToggleBoxBtn.BackgroundColor3 = Ayarlar.BoxEspAktif and Color3.fromRGB(46, 117, 89) or Color3.fromRGB(35, 35, 35)
+end)
+
+-- Color Cycle
+ToggleColorBtn.MouseButton1Click:Connect(function()
+    Ayarlar.SeciliRenkIndex = Ayarlar.SeciliRenkIndex + 1
+    if Ayarlar.SeciliRenkIndex > #RenkPaleti then
+        Ayarlar.SeciliRenkIndex = 1
+    end
+    local aktifPalet = RenkPaleti[Ayarlar.SeciliRenkIndex]
+    ToggleColorBtn.Text = "ESP Rengi: " .. aktifPalet.Isim
+    ToggleColorBtn.TextColor3 = aktifPalet.Renk
+end)
+
+FovInput.FocusLost:Connect(function()
+    local val = tonumber(FovInput.Text)
+    Ayarlar.FOV = math.clamp(val or Ayarlar.FOV, 1, 600)
+    FovInput.Text = tostring(Ayarlar.FOV)
+end)
+
+SmoothnessInput.FocusLost:Connect(function()
+    local val = tonumber(SmoothnessInput.Text)
+    Ayarlar.Yumusaklik = math.clamp(val or Ayarlar.Yumusaklik, 1, 50)
+    SmoothnessInput.Text = tostring(Ayarlar.Yumusaklik)
+end)
+
+-- Menu Toggle Only With "V" Key
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.V then
+        menuAcik = not menuAcik
+        MainFrame.Visible = menuAcik
+        ModalButton.Modal = menuAcik
+    end
+end)
+
+-- ==========================================
+-- 4. AIMBOT LOGIC (LEFT ALT HOTKEY)
+-- ==========================================
+
+local kilitliHedef = nil
+
+local function enYakinOyuncuyuBul()
+    if kilitliHedef and Ayarlar.HedefKilidi and kilitliHedef.Character and kilitliHedef.Character:FindFirstChild("HumanoidRootPart") and kilitliHedef.Character:FindFirstChildOfClass("Humanoid") and kilitliHedef.Character:FindFirstChildOfClass("Humanoid").Health > 0 then
+        local _, ekrandaMi = Camera:WorldToViewportPoint(kilitliHedef.Character.HumanoidRootPart.Position)
+        if ekrandaMi then
+            return kilitliHedef
         end
+    end
+
+    local enYakinMesafe = Ayarlar.FOV
+    local adayOyuncu = nil
+
+    for _, v in pairs(Players:GetPlayers()) do
+        if v ~= LocalPlayer and v.Character and v.Character:FindFirstChild("HumanoidRootPart") and v.Character:FindFirstChildOfClass("Humanoid") then
+            if v.Character:FindFirstChildOfClass("Humanoid").Health > 0 then
+                local ekrandakiPozisyon, ekrandaMi = Camera:WorldToViewportPoint(v.Character.HumanoidRootPart.Position)
+                if ekrandaMi then
+                    local farePozisyonu = UserInputService:GetMouseLocation()
+                    local mesafe = (Vector2.new(ekrandakiPozisyon.X, ekrandakiPozisyon.Y) - farePozisyonu).Magnitude
+                    if mesafe < enYakinMesafe then
+                        enYakinMesafe = mesafe
+                        adayOyuncu = v
+                    end
+                end
+            end
+        end
+    end
+    kilitliHedef = adayOyuncu
+    return adayOyuncu
+end
+
+-- ==========================================
+-- 5. ESP SYSTEM (PREMIUM DESIGN & HIGH FPS)
+-- ==========================================
+
+local EspObjeleri = {}
+
+local function cizgiOlustur()
+    local l = Drawing.new("Line")
+    l.Visible = false
+    l.Color = Color3.fromRGB(255, 0, 0)
+    l.Thickness = 1.5
+    l.Transparency = 1
+    return l
+end
+
+local function kutuOlustur()
+    local b = Drawing.new("Square")
+    b.Visible = false
+    b.Color = Color3.fromRGB(255, 0, 0)
+    b.Thickness = 1.5
+    b.Filled = false
+    return b
+end
+
+local function daireOlustur(radius)
+    local c = Drawing.new("Circle")
+    c.Visible = false
+    c.Filled = true
+    c.Radius = radius or 2.5
+    c.NumSides = 12
+    c.Transparency = 1
+    return c
+end
+
+local function yaziOlustur(color, size)
+    local t = Drawing.new("Text")
+    t.Visible = false
+    t.Color = color or Color3.fromRGB(255, 255, 255)
+    t.Size = size or 13
+    t.Center = true
+    t.Outline = true
+    return t
+end
+
+local function espOlustur(oyuncu)
+    if EspObjeleri[oyuncu] then return end
+    
+    local lines = {
+        Boyun = cizgiOlustur(),
+        SolOmuz = cizgiOlustur(),
+        SolKol = cizgiOlustur(),
+        SagOmuz = cizgiOlustur(),
+        SagKol = cizgiOlustur(),
+        Omurga = cizgiOlustur(),
+        SolKalca = cizgiOlustur(),
+        SolBacak = cizgiOlustur(),
+        SagKalca = cizgiOlustur(),
+        SagBacak = cizgiOlustur()
+    }
+
+    -- Aesthetic joint dots
+    local joints = {
+        Kafa = daireOlustur(3), -- Head is slightly larger
+        SolOmuz = daireOlustur(2.2),
+        SagOmuz = daireOlustur(2.2),
+        SolDirsek = daireOlustur(2.2),
+        SagDirsek = daireOlustur(2.2),
+        SolKalca = daireOlustur(2.2),
+        SagKalca = daireOlustur(2.2),
+        SolDiz = daireOlustur(2.2),
+        SagDiz = daireOlustur(2.2)
+    }
+    
+    local box = kutuOlustur()
+    local isim = yaziOlustur(Color3.fromRGB(255, 255, 255), 13)
+    
+    -- Visual HP Bar Squares
+    local hpBarBG = kutuOlustur()
+    local hpBarMain = kutuOlustur()
+    
+    EspObjeleri[oyuncu] = {
+        Lines = lines, 
+        Joints = joints,
+        Box = box, 
+        Isim = isim, 
+        HpBarBG = hpBarBG, 
+        HpBarMain = hpBarMain
     }
 end
 
-CreateToggle("ESP Acik", Settings.ESP_Enabled, function(val)
-    Settings.ESP_Enabled = val
-    if not val then ClearAllDrawings() end
-end)
-CreateToggle("Kutular (Boxes)", Settings.Boxes, function(val) Settings.Boxes = val end)
-CreateToggle("Iz Cizgisi (Tracers)", Settings.Tracers, function(val) Settings.Tracers = val end)
-CreateToggle("Isimler (Names)", Settings.Names, function(val) Settings.Names = val end)
-CreateToggle("Mesafe (Distance)", Settings.Distance, function(val) Settings.Distance = val end)
-CreateToggle("Can Bari (Health)", Settings.HealthBar, function(val) Settings.HealthBar = val end)
-CreateToggle("Kafa Noktasi", Settings.HeadDot, function(val) Settings.HeadDot = val end)
+local function espTemizle(oyuncu)
+    if EspObjeleri[oyuncu] then
+        for _, line in pairs(EspObjeleri[oyuncu].Lines) do
+            line:Remove()
+        end
+        for _, joint in pairs(EspObjeleri[oyuncu].Joints) do
+            joint:Remove()
+        end
+        EspObjeleri[oyuncu].Box:Remove()
+        EspObjeleri[oyuncu].Isim:Remove()
+        EspObjeleri[oyuncu].HpBarBG:Remove()
+        EspObjeleri[oyuncu].HpBarMain:Remove()
+        EspObjeleri[oyuncu] = nil
+    end
+end
 
-local Footer = Instance.new("TextLabel")
-Footer.Text = "wexe | offset ESP"
-Footer.Size = UDim2.new(1, 0, 0, 20)
-Footer.Position = UDim2.new(0, 0, 1, -20)
-Footer.BackgroundTransparency = 1
-Footer.TextColor3 = Color3.fromRGB(200, 180, 255)
-Footer.Font = Enum.Font.GothamMedium
-Footer.TextSize = 11
-Footer.Parent = MainFrame
+Players.PlayerAdded:Connect(espOlustur)
+Players.PlayerRemoving:Connect(espTemizle)
+for _, p in pairs(Players:GetPlayers()) do
+    if p ~= LocalPlayer then espOlustur(p) end
+end
+
+-- Optimized Bone Draw
+local function kemikCiz(line, p1, p2, customColor, distance)
+    local pos1, ekranda1 = Camera:WorldToViewportPoint(p1.Position)
+    local pos2, ekranda2 = Camera:WorldToViewportPoint(p2.Position)
+    
+    if ekranda1 and ekranda2 then
+        line.From = Vector2.new(pos1.X, pos1.Y)
+        line.To = Vector2.new(pos2.X, pos2.Y)
+        line.Color = customColor
+        line.Thickness = math.clamp(30 / (distance * 0.1), 1, 2)
+        line.Visible = true
+    else
+        line.Visible = false
+    end
+end
+
+-- Optimized Joint Draw
+local function eklemCiz(circle, part, customColor, distance)
+    local pos, ekranda = Camera:WorldToViewportPoint(part.Position)
+    if ekranda then
+        circle.Position = Vector2.new(pos.X, pos.Y)
+        circle.Color = customColor
+        circle.Radius = math.clamp(25 / (distance * 0.1), 1.5, 3)
+        circle.Visible = true
+    else
+        circle.Visible = false
+    end
+end
+
+-- ==========================================
+-- 6. MAIN LOOP (RENDERSTEPPED)
+-- ==========================================
 
 RunService.RenderStepped:Connect(function()
-    UpdateESP()
+    -- FOV Update
+    if Ayarlar.AimAktif then
+        FovCircle.Visible = true
+        FovCircle.Radius = Ayarlar.FOV
+        FovCircle.Position = UserInputService:GetMouseLocation()
+    else
+        FovCircle.Visible = false
+    end
+
+    local aktifColor = getAktifRenk()
+
+    -- ESP Loop
+    for oyuncu, objeler in pairs(EspObjeleri) do
+        local karakter = oyuncu.Character
+        local isAlive = karakter and karakter:FindFirstChild("HumanoidRootPart") and karakter:FindFirstChildOfClass("Humanoid") and karakter:FindFirstChildOfClass("Humanoid").Health > 0
+        
+        if isAlive then
+            local Head = karakter:FindFirstChild("Head")
+            local hrp = karakter.HumanoidRootPart
+            local humanoid = karakter:FindFirstChildOfClass("Humanoid")
+            
+            -- Viewport Performance Skip
+            local hrpPos, ekrandaMi = Camera:WorldToViewportPoint(hrp.Position)
+            local distance = (Camera.CFrame.Position - hrp.Position).Magnitude
+            
+            if not ekrandaMi then
+                for _, line in pairs(objeler.Lines) do line.Visible = false end
+                for _, joint in pairs(objeler.Joints) do joint.Visible = false end
+                objeler.Box.Visible = false
+                objeler.Isim.Visible = false
+                objeler.HpBarBG.Visible = false
+                objeler.HpBarMain.Visible = false
+                continue
+            end
+            
+            local isR15 = karakter:FindFirstChild("UpperTorso") ~= nil
+            local Torso = isR15 and karakter:FindFirstChild("UpperTorso") or karakter:FindFirstChild("Torso")
+            local Hip = isR15 and karakter:FindFirstChild("LowerTorso") or Torso
+            
+            -- SKELETON ESP (Smooth & Beautiful Joint System)
+            if Ayarlar.SkeletonEspAktif and Head then
+                local LeftArm = isR15 and karakter:FindFirstChild("LeftUpperArm") or karakter:FindFirstChild("Left Arm")
+                local LeftForearm = isR15 and karakter:FindFirstChild("LeftLowerArm") or LeftArm
+                local RightArm = isR15 and karakter:FindFirstChild("RightUpperArm") or karakter:FindFirstChild("Right Arm")
+                local RightForearm = isR15 and karakter:FindFirstChild("RightLowerArm") or RightArm
+                
+                local LeftLeg = isR15 and karakter:FindFirstChild("LeftUpperLeg") or karakter:FindFirstChild("Left Leg")
+                local LeftFoot = isR15 and karakter:FindFirstChild("LeftLowerLeg") or LeftLeg
+                local RightLeg = isR15 and karakter:FindFirstChild("RightUpperLeg") or karakter:FindFirstChild("Right Leg")
+                local RightFoot = isR15 and karakter:FindFirstChild("RightLowerLeg") or RightLeg
+                
+                if Torso and Hip and LeftArm and RightArm and LeftLeg and RightLeg then
+                    -- Render Bones
+                    kemikCiz(objeler.Lines.Boyun, Head, Torso, aktifColor, distance)
+                    kemikCiz(objeler.Lines.Omurga, Torso, Hip, aktifColor, distance)
+                    kemikCiz(objeler.Lines.SolOmuz, Torso, LeftArm, aktifColor, distance)
+                    kemikCiz(objeler.Lines.SolKol, LeftArm, LeftForearm, aktifColor, distance)
+                    kemikCiz(objeler.Lines.SagOmuz, Torso, RightArm, aktifColor, distance)
+                    kemikCiz(objeler.Lines.SagKol, RightArm, RightForearm, aktifColor, distance)
+                    kemikCiz(objeler.Lines.SolKalca, Hip, LeftLeg, aktifColor, distance)
+                    kemikCiz(objeler.Lines.SolBacak, LeftLeg, LeftFoot, aktifColor, distance)
+                    kemikCiz(objeler.Lines.SagKalca, Hip, RightLeg, aktifColor, distance)
+                    kemikCiz(objeler.Lines.SagBacak, RightLeg, RightFoot, aktifColor, distance)
+                    
+                    -- Render Joint Circles (Adds premium visual polish)
+                    eklemCiz(objeler.Joints.Kafa, Head, Color3.fromRGB(255, 255, 255), distance) -- White skull core
+                    eklemCiz(objeler.Joints.SolOmuz, LeftArm, aktifColor, distance)
+                    eklemCiz(objeler.Joints.SagOmuz, RightArm, aktifColor, distance)
+                    eklemCiz(objeler.Joints.SolDirsek, LeftForearm, aktifColor, distance)
+                    eklemCiz(objeler.Joints.SagDirsek, RightForearm, aktifColor, distance)
+                    eklemCiz(objeler.Joints.SolKalca, LeftLeg, aktifColor, distance)
+                    eklemCiz(objeler.Joints.SagKalca, RightLeg, aktifColor, distance)
+                    eklemCiz(objeler.Joints.SolDiz, LeftFoot, aktifColor, distance)
+                    eklemCiz(objeler.Joints.SagDiz, RightFoot, aktifColor, distance)
+                else
+                    for _, line in pairs(objeler.Lines) do line.Visible = false end
+                    for _, joint in pairs(objeler.Joints) do joint.Visible = false end
+                end
+            else
+                for _, line in pairs(objeler.Lines) do line.Visible = false end
+                for _, joint in pairs(objeler.Joints) do joint.Visible = false end
+            end
+            
+            -- BOX ESP & DYNAMIC HEALTH BAR (MODIFIED FOR OUTSIDE LEFT PLACEMENT)
+            if Ayarlar.BoxEspAktif then
+                local yukseklik = (Camera:WorldToViewportPoint(hrp.Position + Vector3.new(0, 3, 0)).Y - Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, 3, 0)).Y)
+                local genislik = yukseklik * 0.6
+                
+                local boxX = hrpPos.X - genislik / 2
+                local boxY = hrpPos.Y - yukseklik / 2
+                
+                -- Draw main player box
+                objeler.Box.Size = Vector2.new(genislik, yukseklik)
+                objeler.Box.Position = Vector2.new(boxX, boxY)
+                objeler.Box.Color = aktifColor
+                objeler.Box.Visible = true
+                
+                -- Calculations for Health Bar
+                local canOrani = math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)
+                local barGenislik = 3
+                local barMesafe = 6 -- Gap between Box and Health Bar (Outside on the left)
+                local barYolUzunlugu = yukseklik
+                local aktifBarBoyu = barYolUzunlugu * canOrani
+                
+                -- HP Bar Background (Black outline frame - placed outside of Box)
+                objeler.HpBarBG.Size = Vector2.new(barGenislik + 2, barYolUzunlugu + 2)
+                objeler.HpBarBG.Position = Vector2.new(boxX - barMesafe - barGenislik - 1, boxY - 1)
+                objeler.HpBarBG.Color = Color3.fromRGB(15, 15, 15)
+                objeler.HpBarBG.Filled = true
+                objeler.HpBarBG.Visible = true
+                
+                -- HP Bar Foreground (Placed outside of Box)
+                objeler.HpBarMain.Size = Vector2.new(barGenislik, aktifBarBoyu)
+                objeler.HpBarMain.Position = Vector2.new(boxX - barMesafe - barGenislik, boxY + barYolUzunlugu - aktifBarBoyu)
+                objeler.HpBarMain.Color = getHealthColor(canOrani)
+                objeler.HpBarMain.Filled = true
+                objeler.HpBarMain.Visible = true
+            else
+                objeler.Box.Visible = false
+                objeler.HpBarBG.Visible = false
+                objeler.HpBarMain.Visible = false
+            end
+            
+            -- NAME ESP (Anchored safely on top of player's head)
+            if (Ayarlar.SkeletonEspAktif or Ayarlar.BoxEspAktif) and Head then
+                local kafaUstPos, ekrandaMiKafa = Camera:WorldToViewportPoint(Head.Position + Vector3.new(0, 2.5, 0))
+                if ekrandaMiKafa then
+                    objeler.Isim.Text = oyuncu.Name
+                    objeler.Isim.Position = Vector2.new(kafaUstPos.X, kafaUstPos.Y)
+                    objeler.Isim.Color = Color3.fromRGB(255, 255, 255)
+                    objeler.Isim.Visible = true
+                else
+                    objeler.Isim.Visible = false
+                end
+            else
+                objeler.Isim.Visible = false
+            end
+            
+        else
+            -- Clean state when player is dead
+            for _, line in pairs(objeler.Lines) do line.Visible = false end
+            for _, joint in pairs(objeler.Joints) do joint.Visible = false end
+            objeler.Box.Visible = false
+            objeler.Isim.Visible = false
+            objeler.HpBarBG.Visible = false
+            objeler.HpBarMain.Visible = false
+        end
+    end
+
+    -- AIMBOT (Left Alt Key Hotkey check)
+    if Ayarlar.AimAktif and UserInputService:IsKeyDown(Enum.KeyCode.LeftAlt) then
+        local hedef = enYakinOyuncuyuBul()
+        if hedef and hedef.Character then
+            local hedefParca = hedef.Character:FindFirstChild(Ayarlar.AimBolgesi)
+            
+            if hedefParca then
+                local hedefPozisyon = hedefParca.Position
+                local yeniKameraCFrame = CFrame.new(Camera.CFrame.Position, hedefPozisyon)
+                Camera.CFrame = Camera.CFrame:Lerp(yeniKameraCFrame, 1 / Ayarlar.Yumusaklik)
+            end
+        end
+    else
+        kilitliHedef = nil
+    end
 end)
 
-Players.PlayerRemoving:Connect(function(player)
-    ClearPlayerDrawings(player)
+-- DRAG SYSTEM FOR PANEL
+local dragging, dragInput, dragStart, startPos
+local function update(input)
+    local delta = input.Position - dragStart
+    MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+end
+
+MainFrame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = MainFrame.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
 end)
+
+MainFrame.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        update(input)
+    end
+end)
+
+print("[SUCCESS] Test Panel V9.0 Loaded! Joint-Skeleton & Dynamic 2D HP Bar fully active.")
